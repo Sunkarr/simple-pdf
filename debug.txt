@@ -1,0 +1,11 @@
+NewTabButton: <NSTabBarNewTabButton: 0x7def04600>
+Class: NSTabBarNewTabButton
+isBordered: Optional(true)
+bezelStyle: Optional(16)
+wantsLayer: true
+layer: Optional(<NSViewBackingLayer:0x7d895b6c0; name = "NSTabBarNewTabButton"; position = CGPoint (1029.5 0); bounds = CGRect (0 0; 28 28); delegate = <NSTabBarNewTabButton: 0x7def04600>; sublayers = (<NSViewBackingLayer: 0x7d791fc60>); needsLayoutOnGeometryChange = NO; geometryFlipped = YES; hitTestsContentsAlphaChannel = YES; allowsGroupBlending = NO; anchorPoint = CGPoint (0 0); contentsScale = 2; NS_view = <NSTabBarNewTabButton: 0x7def04600>; name = NSTabBarNewTabButton>)
+- backgroundColor: nil
+- cornerRadius: 0.0
+- borderWidth: 0.0
+frame: (1029.5, 0.0, 28.0, 28.0)
+bounds: (0.0, 0.0, 28.0, 28.0)
