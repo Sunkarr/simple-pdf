@@ -113,6 +113,7 @@ struct ContentView: View {
     @State private var autoScales: Bool = true
     @State private var displayMode: PDFDisplayMode = .singlePageContinuous
     
+    @AppStorage("sidebarWidth") private var sidebarWidth: Double = 250.0
     @AppStorage("shortcut_zoomFit") private var zoomFitShortcutData: Data?
     
     private var zoomFitShortcut: ShortcutConfig {
@@ -131,6 +132,17 @@ struct ContentView: View {
                         pdfView: sharedPDFView,
                         currentPage: $currentPage
                     )
+                    .background(
+                        GeometryReader { geometry in
+                            Color.clear
+                                .onChange(of: geometry.size.width) { _, newWidth in
+                                    if newWidth >= 150 && abs(sidebarWidth - newWidth) > 0.5 {
+                                        sidebarWidth = newWidth
+                                    }
+                                }
+                        }
+                    )
+                    .navigationSplitViewColumnWidth(min: 150, ideal: sidebarWidth, max: 400)
                 } detail: {
                     ZStack {
                         VStack(spacing: 0) {
