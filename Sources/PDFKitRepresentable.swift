@@ -33,9 +33,18 @@ class WindowCloseProxy: NSObject, NSWindowDelegate {
     }
 }
 
-class CustomPDFView: PDFView {
+class CustomPDFView: PDFView, PDFDocumentDelegate {
     private var scrollMonitor: Any?
     private var closeProxy: WindowCloseProxy?
+    
+    private var activeHighlightedPage: HighlightablePDFPage?
+    private var activeHighlightedRect: CGRect?
+    
+    override var document: PDFDocument? {
+        didSet {
+            document?.delegate = self
+        }
+    }
     
     var isPresentationMode = false {
         didSet {
@@ -239,8 +248,112 @@ class CustomPDFView: PDFView {
         }
     }
     
+    private func clearImageHighlight() {
+        if let page = activeHighlightedPage {
+            page.highlightedImageRect = nil
+            activeHighlightedPage = nil
+            activeHighlightedRect = nil
+            self.needsDisplay = true
+        }
+    }
+    
+    @objc private func copySelectedImage() {
+        guard let page = activeHighlightedPage,
+              let rect = activeHighlightedRect else { return }
+        
+        let scale: CGFloat = 3.0
+        let pageBounds = page.bounds(for: .cropBox)
+        
+        let targetSize = NSSize(width: pageBounds.width * scale, height: pageBounds.height * scale)
+        let thumbnail = page.thumbnail(of: targetSize, for: .cropBox)
+        
+        let rotatedRect = cropRectFor(rect: rect, pageBounds: pageBounds, rotation: page.rotation)
+        
+        let rotatedHeight = (page.rotation == 90 || page.rotation == 270) ? pageBounds.width : pageBounds.height
+        
+        let cgCropRect = CGRect(
+            x: rotatedRect.origin.x * scale,
+            y: (rotatedHeight - rotatedRect.origin.y - rotatedRect.height) * scale,
+            width: rotatedRect.width * scale,
+            height: rotatedRect.height * scale
+        )
+        
+        guard let cgImage = thumbnail.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
+        guard let croppedCGImage = cgImage.cropping(to: cgCropRect) else { return }
+        
+        let croppedNSImage = NSImage(cgImage: croppedCGImage, size: NSSize(width: rect.width * scale, height: rect.height * scale))
+        
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects([croppedNSImage])
+    }
+    
+    private func cropRectFor(rect: CGRect, pageBounds: CGRect, rotation: Int) -> CGRect {
+        let x = rect.origin.x - pageBounds.origin.x
+        let y = rect.origin.y - pageBounds.origin.y
+        let w = rect.width
+        let h = rect.height
+        
+        let width = pageBounds.width
+        let height = pageBounds.height
+        
+        switch rotation {
+        case 90:
+            return CGRect(x: y, y: width - x - w, width: h, height: w)
+        case 180:
+            return CGRect(x: width - x - w, y: height - y - h, width: w, height: h)
+        case 270:
+            return CGRect(x: height - y - h, y: x, width: h, height: w)
+        default:
+            return CGRect(x: x, y: y, width: w, height: h)
+        }
+    }
+    
+    override func menuDidClose(_ menu: NSMenu) {
+        DispatchQueue.main.async { [weak self] in
+            self?.clearImageHighlight()
+        }
+    }
+    
+    func classForPage() -> AnyClass {
+        return HighlightablePDFPage.self
+    }
+    
     override func menu(for event: NSEvent) -> NSMenu? {
+        clearImageHighlight()
+        
+        let viewPoint = self.convert(event.locationInWindow, from: nil)
+        var isImageMenu = false
+        
+        if let page = self.page(for: viewPoint, nearest: false),
+           let cgPage = page.pageRef {
+            let pagePoint = self.convert(viewPoint, to: page)
+            
+            let scanner = PDFImageScanner(page: cgPage)
+            let imageRects = scanner.scan()
+            
+            if let clickedRect = imageRects.first(where: { $0.contains(pagePoint) }) {
+                if let highlightablePage = page as? HighlightablePDFPage {
+                    highlightablePage.highlightedImageRect = clickedRect
+                    self.activeHighlightedPage = highlightablePage
+                    self.activeHighlightedRect = clickedRect
+                    self.needsDisplay = true
+                    isImageMenu = true
+                    self.currentSelection = nil // Clear text selection to prevent double selection
+                }
+            }
+        }
+        
         guard let menu = super.menu(for: event) else { return nil }
+        
+        menu.delegate = self
+        
+        if isImageMenu {
+            let copyItem = NSMenuItem(title: "Copy Image", action: #selector(copySelectedImage), keyEquivalent: "")
+            copyItem.target = self
+            menu.insertItem(copyItem, at: 0)
+            menu.insertItem(NSMenuItem.separator(), at: 1)
+        }
         
         let actionsToSuppress: Set<String> = [
             "_setSinglePage:",
@@ -489,5 +602,117 @@ struct PDFThumbnailViewRepresentable: NSViewRepresentable {
     
     func updateNSView(_ nsView: PDFThumbnailView, context: Context) {
         nsView.pdfView = pdfView
+    }
+}
+
+class HighlightablePDFPage: PDFPage {
+    var highlightedImageRect: CGRect?
+    
+    override func draw(with box: PDFDisplayBox, to context: CGContext) {
+        super.draw(with: box, to: context)
+        
+        if let rect = highlightedImageRect {
+            context.saveGState()
+            context.setFillColor(NSColor.systemBlue.withAlphaComponent(0.25).cgColor)
+            context.setStrokeColor(NSColor.systemBlue.cgColor)
+            context.setLineWidth(2.0)
+            context.fill(rect)
+            context.stroke(rect)
+            context.restoreGState()
+        }
+    }
+}
+
+class PDFImageScanner {
+    var currentCTM = CGAffineTransform.identity
+    var ctmStack: [CGAffineTransform] = []
+    var imageRects: [CGRect] = []
+    let page: CGPDFPage
+    
+    init(page: CGPDFPage) {
+        self.page = page
+    }
+    
+    func scan() -> [CGRect] {
+        let contentStream = CGPDFContentStreamCreateWithPage(page)
+        guard let table = CGPDFOperatorTableCreate() else { return [] }
+        
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        
+        CGPDFOperatorTableSetCallback(table, "q") { (_, info) in
+            guard let info = info else { return }
+            let scannerState = Unmanaged<PDFImageScanner>.fromOpaque(info).takeUnretainedValue()
+            scannerState.ctmStack.append(scannerState.currentCTM)
+        }
+        
+        CGPDFOperatorTableSetCallback(table, "Q") { (_, info) in
+            guard let info = info else { return }
+            let scannerState = Unmanaged<PDFImageScanner>.fromOpaque(info).takeUnretainedValue()
+            if !scannerState.ctmStack.isEmpty {
+                scannerState.currentCTM = scannerState.ctmStack.removeLast()
+            }
+        }
+        
+        CGPDFOperatorTableSetCallback(table, "cm") { (scanner, info) in
+            guard let info = info else { return }
+            let scannerState = Unmanaged<PDFImageScanner>.fromOpaque(info).takeUnretainedValue()
+            
+            var ty: CGPDFReal = 0
+            var tx: CGPDFReal = 0
+            var d: CGPDFReal = 0
+            var c: CGPDFReal = 0
+            var b: CGPDFReal = 0
+            var a: CGPDFReal = 0
+            
+            if CGPDFScannerPopNumber(scanner, &ty),
+               CGPDFScannerPopNumber(scanner, &tx),
+               CGPDFScannerPopNumber(scanner, &d),
+               CGPDFScannerPopNumber(scanner, &c),
+               CGPDFScannerPopNumber(scanner, &b),
+               CGPDFScannerPopNumber(scanner, &a) {
+                let transform = CGAffineTransform(a: a, b: b, c: c, d: d, tx: tx, ty: ty)
+                scannerState.currentCTM = transform.concatenating(scannerState.currentCTM)
+            }
+        }
+        
+        CGPDFOperatorTableSetCallback(table, "Do") { (scanner, info) in
+            guard let info = info else { return }
+            let scannerState = Unmanaged<PDFImageScanner>.fromOpaque(info).takeUnretainedValue()
+            
+            var name: UnsafePointer<Int8>? = nil
+            if CGPDFScannerPopName(scanner, &name), let name = name {
+                let objectName = String(cString: name)
+                if scannerState.isImage(objectName) {
+                    let unitRect = CGRect(x: 0, y: 0, width: 1, height: 1)
+                    let rect = unitRect.applying(scannerState.currentCTM)
+                    scannerState.imageRects.append(rect)
+                }
+            }
+        }
+        
+        let pdfScanner = CGPDFScannerCreate(contentStream, table, selfPtr)
+        CGPDFScannerScan(pdfScanner)
+        
+        return imageRects
+    }
+    
+    private func isImage(_ name: String) -> Bool {
+        guard let pageDict = page.dictionary else { return false }
+        var resources: CGPDFDictionaryRef? = nil
+        if CGPDFDictionaryGetDictionary(pageDict, "Resources", &resources), let res = resources {
+            var xObjects: CGPDFDictionaryRef? = nil
+            if CGPDFDictionaryGetDictionary(res, "XObject", &xObjects), let xObjs = xObjects {
+                var stream: CGPDFStreamRef? = nil
+                if CGPDFDictionaryGetStream(xObjs, name, &stream), let str = stream {
+                    if let streamDict = CGPDFStreamGetDictionary(str) {
+                        var subtype: UnsafePointer<Int8>? = nil
+                        if CGPDFDictionaryGetName(streamDict, "Subtype", &subtype), let sub = subtype {
+                            return String(cString: sub) == "Image"
+                        }
+                    }
+                }
+            }
+        }
+        return false
     }
 }

@@ -460,6 +460,18 @@ struct ContentView: View {
             WindowAccessor(shouldClose: shouldCloseWindow) { window in
                 self.currentWindow = window
                 self.updateRegistry()
+                
+                // Suppress toolbar right-click context menu
+                if let toolbar = window.toolbar {
+                    toolbar.allowsUserCustomization = false
+                    if #available(macOS 15.0, *) {
+                        toolbar.allowsDisplayModeCustomization = false
+                    }
+                }
+                if let superview = window.contentView?.superview {
+                    superview.menu = nil
+                }
+                
                 if let url = fileURL {
                     if let existingWindow = OpenDocumentsRegistry.shared.window(showing: url), existingWindow != window {
                         existingWindow.makeKeyAndOrderFront(nil)
@@ -542,6 +554,21 @@ struct ContentView: View {
     // Dynamically inject the sort button next to the native plus button on the AppKit tab bar
     private func setupTabBarButtons() {
         guard let window = currentWindow ?? NSApp.keyWindow else { return }
+        
+        // Suppress toolbar right-click context menu
+        if let toolbar = window.toolbar {
+            if toolbar.allowsUserCustomization {
+                toolbar.allowsUserCustomization = false
+            }
+            if #available(macOS 15.0, *) {
+                if toolbar.allowsDisplayModeCustomization {
+                    toolbar.allowsDisplayModeCustomization = false
+                }
+            }
+        }
+        if let superview = window.contentView?.superview, superview.menu != nil {
+            superview.menu = nil
+        }
         
         func findNewTabButton(in view: NSView) -> NSView? {
             let className = String(describing: type(of: view))
@@ -712,6 +739,7 @@ struct ContentView: View {
         }
         
         if let doc = PDFDocument(url: url) {
+            doc.delegate = sharedPDFView
             self.pdfDocument = doc
             self.totalPages = doc.pageCount
             self.currentPage = 1
