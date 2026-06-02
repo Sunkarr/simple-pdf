@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import ServiceManagement
+import UniformTypeIdentifiers
 
 // Model for saving custom shortcut settings
 struct ShortcutConfig: Codable, Equatable {
@@ -198,6 +199,7 @@ struct SettingsView: View {
     @AppStorage("PageDimensionUnit") private var pageDimensionUnit: String = "mm"
     @AppStorage("RestoreSessionOnLaunch") private var restoreSession: Bool = true
     @State private var launchAtLogin = LoginItemManager.isLaunchAtLoginEnabled
+    @State private var isDefaultApp: Bool = false
     
     @AppStorage("presentationShowProgressBar") private var showProgressBar: Bool = true
     @AppStorage("presentationProgressBarPosition") private var progressBarPosition: String = "bottom"
@@ -332,7 +334,46 @@ struct SettingsView: View {
                             .stroke(Color.gray.opacity(0.15), lineWidth: 1)
                     )
                     
-                    // Section 3: Presentation Mode
+                    // Section 3: System Integration
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("System Integration")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Default PDF Reader")
+                                    .foregroundColor(.primary)
+                                if isDefaultApp {
+                                    Text("SimplePDF is already standard app for PDF")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Text("Make SimplePDF your default application for viewing PDFs")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            
+                            Spacer()
+                            
+                            Button("Make Default") {
+                                setDefaultApp()
+                            }
+                            .disabled(isDefaultApp)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.gray.opacity(0.15), lineWidth: 1)
+                    )
+                    
+                    // Section 4: Presentation Mode
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Presentation Mode")
                             .font(.headline)
@@ -391,7 +432,7 @@ struct SettingsView: View {
                         RoundedRectangle(cornerRadius: 8)
                             .stroke(Color.gray.opacity(0.15), lineWidth: 1)
                     )
-                    // Section 4: Debugging
+                    // Section 5: Debugging
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Debugging")
                             .font(.headline)
@@ -488,8 +529,30 @@ struct SettingsView: View {
         }
         .onAppear {
             selectedTab = "credits"
+            checkDefaultApp()
         }
         .frame(width: 440, height: 420)
+    }
+    
+    private func checkDefaultApp() {
+        if let defaultURL = NSWorkspace.shared.urlForApplication(toOpen: .pdf) {
+            if let defaultBundleId = Bundle(url: defaultURL)?.bundleIdentifier {
+                isDefaultApp = defaultBundleId == Bundle.main.bundleIdentifier
+            }
+        }
+    }
+    
+    private func setDefaultApp() {
+        Task {
+            do {
+                try await NSWorkspace.shared.setDefaultApplication(at: Bundle.main.bundleURL, toOpen: .pdf)
+                await MainActor.run {
+                    checkDefaultApp()
+                }
+            } catch {
+                print("SimplePDF: Failed to set default application: \(error)")
+            }
+        }
     }
 }
 
