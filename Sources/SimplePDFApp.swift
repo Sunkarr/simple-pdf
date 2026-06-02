@@ -24,6 +24,10 @@ struct JumpToPageActionKey: FocusedValueKey {
     typealias Value = () -> Void
 }
 
+struct PresentationActionKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
 extension FocusedValues {
     var searchAction: SearchActionKey.Value? {
         get { self[SearchActionKey.self] }
@@ -48,6 +52,11 @@ extension FocusedValues {
     var jumpToPageAction: JumpToPageActionKey.Value? {
         get { self[JumpToPageActionKey.self] }
         set { self[JumpToPageActionKey.self] = newValue }
+    }
+    
+    var presentationAction: PresentationActionKey.Value? {
+        get { self[PresentationActionKey.self] }
+        set { self[PresentationActionKey.self] = newValue }
     }
 }
 
@@ -144,6 +153,26 @@ struct FileJumpCommands: Commands {
     }
 }
 
+// Commands definition for Presentation Mode (Cmd+Option+P by default)
+struct ViewCommands: Commands {
+    @FocusedValue(\.presentationAction) var presentationAction
+    @AppStorage("shortcut_presentation") private var presentationData: Data?
+    
+    var presentationShortcut: ShortcutConfig {
+        ShortcutManager.getShortcut(forKey: "shortcut_presentation", defaultShortcut: ShortcutManager.defaultPresentation)
+    }
+    
+    var body: some Commands {
+        CommandGroup(after: .sidebar) {
+            Button("Presentation Mode") {
+                presentationAction?()
+            }
+            .keyboardShortcut(presentationShortcut.swiftUIKeyEquivalent, modifiers: presentationShortcut.swiftUIModifiers)
+            .disabled(presentationAction == nil)
+        }
+    }
+}
+
 // Save the paths of all open PDF documents to restore later
 func saveOpenDocuments() {
     let urls = OpenDocumentsRegistry.shared.openPaths()
@@ -233,6 +262,7 @@ struct SimplePDFApp: App {
             SearchCommands()
             CloseCommands()
             FileJumpCommands()
+            ViewCommands()
         }
         
         Settings {

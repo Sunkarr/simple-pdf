@@ -37,6 +37,12 @@ class CustomPDFView: PDFView {
     private var scrollMonitor: Any?
     private var closeProxy: WindowCloseProxy?
     
+    var isPresentationMode = false {
+        didSet {
+            self.backgroundColor = isPresentationMode ? NSColor.black : NSColor.windowBackgroundColor
+        }
+    }
+    
     private var isMiddleDragging = false
     private var initialScrollPoint: NSPoint?
     private var initialMousePoint: NSPoint?
@@ -113,6 +119,11 @@ class CustomPDFView: PDFView {
     }
     
     override func keyDown(with event: NSEvent) {
+        if isPresentationMode && event.keyCode == 53 { // Escape
+            NotificationCenter.default.post(name: Notification.Name("ExitPresentationMode"), object: nil)
+            return
+        }
+        
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
         if modifiers.isEmpty {
             if event.keyCode == 123 { // Left Arrow
@@ -244,13 +255,17 @@ struct PDFViewRepresentable: NSViewRepresentable {
     @Binding var scaleFactor: Double
     @Binding var autoScales: Bool
     @Binding var displayMode: PDFDisplayMode
+    @Binding var isPresentationMode: Bool
+    @Binding var currentPageRect: CGRect
     
     func makeNSView(context: Context) -> CustomPDFView {
         pdfView.document = document
         pdfView.autoScales = autoScales
         pdfView.displayMode = displayMode
-        pdfView.backgroundColor = NSColor.windowBackgroundColor
-        pdfView.displaysPageBreaks = true
+        pdfView.isPresentationMode = isPresentationMode
+        pdfView.backgroundColor = isPresentationMode ? NSColor.black : NSColor.windowBackgroundColor
+        pdfView.displaysPageBreaks = !isPresentationMode
+        pdfView.postsFrameChangedNotifications = true
         
         context.coordinator.updateCurrentPage()
         context.coordinator.updateScaleFactor()
@@ -275,6 +290,19 @@ struct PDFViewRepresentable: NSViewRepresentable {
             }
         }
         
+        // Update presentation mode
+        if nsView.isPresentationMode != isPresentationMode {
+            nsView.isPresentationMode = isPresentationMode
+            DispatchQueue.main.async {
+                context.coordinator.updatePageRect()
+            }
+        }
+        
+        let targetPageBreaks = !isPresentationMode
+        if nsView.displaysPageBreaks != targetPageBreaks {
+            nsView.displaysPageBreaks = targetPageBreaks
+        }
+        
         // Update Auto Scales first (order matters to resolve scale sync races)
         if nsView.autoScales != autoScales {
             nsView.autoScales = autoScales
@@ -294,6 +322,9 @@ struct PDFViewRepresentable: NSViewRepresentable {
         // Update Display Mode
         if nsView.displayMode != displayMode {
             nsView.displayMode = displayMode
+            DispatchQueue.main.async {
+                context.coordinator.updatePageRect()
+            }
         }
         
         // Jump to page if programmatically changed
@@ -336,9 +367,17 @@ struct PDFViewRepresentable: NSViewRepresentable {
             NotificationCenter.default.publisher(for: .PDFViewScaleChanged)
                 .sink { [weak self] notification in
                     guard let self = self,
-                          let notificationView = notification.object as? CustomPDFView,
-                          notificationView == self.parent.pdfView else { return }
-                    self.updateScaleFactor()
+                           let notificationView = notification.object as? CustomPDFView,
+                           notificationView == self.parent.pdfView else { return }
+                     self.updateScaleFactor()
+                }
+                .store(in: &cancellables)
+            
+            // Observe frame changes (window/view resize)
+            NotificationCenter.default.publisher(for: NSView.frameDidChangeNotification, object: parent.pdfView)
+                .sink { [weak self] _ in
+                    guard let self = self else { return }
+                    self.updatePageRect()
                 }
                 .store(in: &cancellables)
         }
@@ -352,6 +391,7 @@ struct PDFViewRepresentable: NSViewRepresentable {
                     self.parent.currentPage = index
                 }
             }
+            updatePageRect()
         }
         
         func updateScaleFactor() {
@@ -362,6 +402,17 @@ struct PDFViewRepresentable: NSViewRepresentable {
                     if !self.parent.pdfView.autoScales && self.parent.autoScales {
                         self.parent.autoScales = false
                     }
+                }
+            }
+            updatePageRect()
+        }
+        
+        func updatePageRect() {
+            guard let page = parent.pdfView.currentPage else { return }
+            let rect = parent.pdfView.convert(page.bounds(for: parent.pdfView.displayBox), from: page)
+            if parent.currentPageRect != rect {
+                DispatchQueue.main.async {
+                    self.parent.currentPageRect = rect
                 }
             }
         }

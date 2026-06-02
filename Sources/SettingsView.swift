@@ -43,6 +43,7 @@ struct ShortcutManager {
     static let defaultGoToPage = ShortcutConfig(key: "p", modifiers: Int(NSEvent.ModifierFlags.command.rawValue))
     static let defaultZoomFit = ShortcutConfig(key: "0", modifiers: Int(NSEvent.ModifierFlags.command.rawValue))
     static let defaultInspector = ShortcutConfig(key: "i", modifiers: Int(NSEvent.ModifierFlags.command.rawValue))
+    static let defaultPresentation = ShortcutConfig(key: "p", modifiers: Int(NSEvent.ModifierFlags.command.rawValue | NSEvent.ModifierFlags.option.rawValue))
     
     static func getShortcut(forKey key: String, defaultShortcut: ShortcutConfig) -> ShortcutConfig {
         if let data = UserDefaults.standard.data(forKey: key),
@@ -198,65 +199,125 @@ struct SettingsView: View {
     @AppStorage("RestoreSessionOnLaunch") private var restoreSession: Bool = true
     @State private var launchAtLogin = LoginItemManager.isLaunchAtLoginEnabled
     
+    @AppStorage("presentationShowProgressBar") private var showProgressBar: Bool = true
+    @AppStorage("presentationProgressBarPosition") private var progressBarPosition: String = "bottom"
+    @AppStorage("presentationProgressBarThickness") private var progressBarThickness: Double = 2.0
+    @AppStorage("presentationProgressBarColor") private var progressBarHexColor: String = "#FF0000"
+    
     var body: some View {
         TabView {
             // Tab 1: General Preferences
-            VStack(alignment: .leading, spacing: 16) {
-                // Section 1: Page Dimensions
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Page Dimensions Display")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    
-                    HStack(spacing: 8) {
-                        Text("Display Unit:")
-                            .foregroundColor(.secondary)
-                        Picker("", selection: $pageDimensionUnit) {
-                            Text("Millimeters (mm)").tag("mm")
-                            Text("Centimeters (cm)").tag("cm")
-                            Text("Inches (in)").tag("inch")
-                            Text("Points (pt)").tag("points")
-                        }
-                        .pickerStyle(.menu)
-                        .frame(width: 180)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
-                .cornerRadius(8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.gray.opacity(0.15), lineWidth: 1)
-                )
-                
-                // Section 2: Startup Behavior
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Startup Behavior")
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Open SimplePDF at login", isOn: $launchAtLogin)
-                            .onChange(of: launchAtLogin) { _, newValue in
-                                LoginItemManager.setLaunchAtLogin(enabled: newValue)
-                            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // Section 1: Page Dimensions
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Page Dimensions Display")
+                            .font(.headline)
+                            .foregroundColor(.primary)
                         
-                        Toggle("Restore last session on launch", isOn: $restoreSession)
+                        HStack(spacing: 8) {
+                            Text("Display Unit:")
+                                .foregroundColor(.secondary)
+                            Picker("", selection: $pageDimensionUnit) {
+                                Text("Millimeters (mm)").tag("mm")
+                                Text("Centimeters (cm)").tag("cm")
+                                Text("Inches (in)").tag("inch")
+                                Text("Points (pt)").tag("points")
+                            }
+                            .pickerStyle(.menu)
+                            .frame(width: 180)
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.gray.opacity(0.15), lineWidth: 1)
+                    )
+                    
+                    // Section 2: Startup Behavior
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Startup Behavior")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            Toggle("Open SimplePDF at login", isOn: $launchAtLogin)
+                                .onChange(of: launchAtLogin) { _, newValue in
+                                    LoginItemManager.setLaunchAtLogin(enabled: newValue)
+                                }
+                            
+                            Toggle("Restore last session on launch", isOn: $restoreSession)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.gray.opacity(0.15), lineWidth: 1)
+                    )
+                    
+                    // Section 3: Presentation Mode
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Presentation Mode")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        
+                        VStack(alignment: .leading, spacing: 10) {
+                            Toggle("Show page progress bar", isOn: $showProgressBar)
+                            
+                            if showProgressBar {
+                                HStack(spacing: 8) {
+                                    Text("Position:")
+                                        .foregroundColor(.secondary)
+                                    Picker("", selection: $progressBarPosition) {
+                                        Text("Top").tag("top")
+                                        Text("Bottom").tag("bottom")
+                                    }
+                                    .pickerStyle(.menu)
+                                    .frame(width: 120)
+                                }
+                                
+                                HStack(spacing: 8) {
+                                    Text("Thickness:")
+                                        .foregroundColor(.secondary)
+                                    Slider(value: $progressBarThickness, in: 1...10, step: 1)
+                                        .labelsHidden()
+                                    Text("\(Int(progressBarThickness)) px")
+                                        .font(.system(.body, design: .monospaced))
+                                        .frame(width: 40, alignment: .trailing)
+                                }
+                                
+                                HStack(spacing: 8) {
+                                    Text("Bar Color:")
+                                        .foregroundColor(.secondary)
+                                    ColorPicker("", selection: Binding(
+                                        get: { Color(hex: progressBarHexColor) },
+                                        set: { progressBarHexColor = $0.toHex() }
+                                    ))
+                                    .labelsHidden()
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.gray.opacity(0.15), lineWidth: 1)
+                    )
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
-                .cornerRadius(8)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.gray.opacity(0.15), lineWidth: 1)
-                )
-                
-                Spacer()
+                .padding(20)
             }
-            .padding(20)
             .tabItem {
                 Label("General", systemImage: "gearshape")
             }
@@ -298,6 +359,8 @@ struct SettingsView: View {
                         ShortcutRecorder(label: "Zoom to Fit", key: "shortcut_zoomFit", defaultShortcut: ShortcutManager.defaultZoomFit)
                         Divider()
                         ShortcutRecorder(label: "Toggle Metadata Inspector", key: "shortcut_inspector", defaultShortcut: ShortcutManager.defaultInspector)
+                        Divider()
+                        ShortcutRecorder(label: "Toggle Presentation Mode", key: "shortcut_presentation", defaultShortcut: ShortcutManager.defaultPresentation)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
@@ -368,5 +431,39 @@ struct SettingsView: View {
             }
         }
         .frame(width: 440, height: 420)
+    }
+}
+
+extension Color {
+    init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let a, r, g, b: UInt64
+        switch hex.count {
+        case 3: // RGB (12-bit)
+            (a, r, g, b) = (255, (int >> 8) * 17, (int >> 4 & 0xF) * 17, (int & 0xF) * 17)
+        case 6: // RGB (24-bit)
+            (a, r, g, b) = (255, int >> 16, int >> 8 & 0xFF, int & 0xFF)
+        case 8: // ARGB (32-bit)
+            (a, r, g, b) = (int >> 24, int >> 16 & 0xFF, int >> 8 & 0xFF, int & 0xFF)
+        default:
+            (a, r, g, b) = (255, 0, 0, 0)
+        }
+        self.init(
+            .sRGB,
+            red: Double(r) / 255,
+            green: Double(g) / 255,
+            blue: Double(b) / 255,
+            opacity: Double(a) / 255
+        )
+    }
+
+    func toHex() -> String {
+        guard let components = NSColor(self).usingColorSpace(.deviceRGB) else { return "#FF0000" }
+        let r = Int(components.redComponent * 255)
+        let g = Int(components.greenComponent * 255)
+        let b = Int(components.blueComponent * 255)
+        return String(format: "#%02X%02X%02X", r, g, b)
     }
 }

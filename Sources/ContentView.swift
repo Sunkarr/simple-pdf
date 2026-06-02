@@ -76,6 +76,14 @@ struct BrandLogoView: View {
     }
 }
 
+enum ViewModeSelection: String, CaseIterable, Identifiable {
+    case single
+    case twoUp
+    case presentation
+    
+    var id: String { self.rawValue }
+}
+
 struct ContentView: View {
     @State var fileURL: URL?
     @State private var currentWindow: NSWindow? = nil
@@ -116,8 +124,54 @@ struct ContentView: View {
     @AppStorage("sidebarWidth") private var sidebarWidth: Double = 250.0
     @AppStorage("shortcut_zoomFit") private var zoomFitShortcutData: Data?
     
+    // Presentation Mode states
+    @State private var isPresentationMode = false
+    @State private var savedDisplayMode: PDFDisplayMode = .singlePageContinuous
+    @State private var savedAutoScales = true
+    @State private var savedColumnVisibility: NavigationSplitViewVisibility = .all
+    
+    @State private var currentPageRect: CGRect = .zero
+    
+    // Presentation AppStorage customization keys
+    @AppStorage("presentationShowProgressBar") private var showProgressBar: Bool = true
+    @AppStorage("presentationProgressBarPosition") private var progressBarPosition: String = "bottom"
+    @AppStorage("presentationProgressBarThickness") private var progressBarThickness: Double = 2.0
+    @AppStorage("presentationProgressBarColor") private var progressBarHexColor: String = "#FF0000"
+    
     private var zoomFitShortcut: ShortcutConfig {
         ShortcutManager.getShortcut(forKey: "shortcut_zoomFit", defaultShortcut: ShortcutManager.defaultZoomFit)
+    }
+    
+    private var viewModeSelection: Binding<ViewModeSelection> {
+        Binding<ViewModeSelection>(
+            get: {
+                if isPresentationMode {
+                    return .presentation
+                } else if displayMode == .twoUpContinuous || displayMode == .twoUp {
+                    return .twoUp
+                } else {
+                    return .single
+                }
+            },
+            set: { newValue in
+                switch newValue {
+                case .single:
+                    if isPresentationMode {
+                        exitPresentationMode()
+                    }
+                    displayMode = .singlePageContinuous
+                case .twoUp:
+                    if isPresentationMode {
+                        exitPresentationMode()
+                    }
+                    displayMode = .twoUpContinuous
+                case .presentation:
+                    if !isPresentationMode {
+                        enterPresentationMode()
+                    }
+                }
+            }
+        )
     }
     
     // Shared CustomPDFView for this document window
@@ -154,20 +208,24 @@ struct ContentView: View {
                                 totalPages: $totalPages,
                                 scaleFactor: $scaleFactor,
                                 autoScales: $autoScales,
-                                displayMode: $displayMode
+                                displayMode: $displayMode,
+                                isPresentationMode: $isPresentationMode,
+                                currentPageRect: $currentPageRect
                             )
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(Color(NSColor.underPageBackgroundColor))
                             
                             // Bottom Status Bar
-                            StatusBarView(
-                                document: doc,
-                                pdfView: sharedPDFView,
-                                currentPage: $currentPage,
-                                totalPages: $totalPages,
-                                scaleFactor: $scaleFactor,
-                                autoScales: $autoScales
-                            )
+                            if !isPresentationMode {
+                                StatusBarView(
+                                    document: doc,
+                                    pdfView: sharedPDFView,
+                                    currentPage: $currentPage,
+                                    totalPages: $totalPages,
+                                    scaleFactor: $scaleFactor,
+                                    autoScales: $autoScales
+                                )
+                            }
                         }
                         
                         // Search HUD overlay
@@ -199,18 +257,39 @@ struct ContentView: View {
                                 Spacer()
                             }
                         }
+                        
+                        // Presentation Progress Bar
+                        if isPresentationMode && showProgressBar && currentPageRect != .zero {
+                            GeometryReader { geo in
+                                let progress = totalPages > 0 ? CGFloat(currentPage) / CGFloat(totalPages) : 0
+                                let width = currentPageRect.size.width * progress
+                                let xOffset = currentPageRect.origin.x
+                                let yOffset = progressBarPosition == "top" ?
+                                    (geo.size.height - currentPageRect.maxY) :
+                                    (geo.size.height - currentPageRect.minY - CGFloat(progressBarThickness))
+                                
+                                Rectangle()
+                                    .fill(Color(hex: progressBarHexColor))
+                                    .frame(width: width, height: CGFloat(progressBarThickness))
+                                    .offset(x: xOffset, y: yOffset)
+                            }
+                            .ignoresSafeArea()
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea(isPresentationMode ? .all : [])
                 }
+                .toolbar(isPresentationMode ? .hidden : .visible, for: .windowToolbar)
                 .toolbar {
                     ToolbarItemGroup(placement: .primaryAction) {
-                        // Portrait vs Spread display modes
-                        Picker("Page Layout", selection: $displayMode) {
-                            Label("Single Page", systemImage: "doc").tag(PDFDisplayMode.singlePageContinuous)
-                            Label("Two Pages", systemImage: "book").tag(PDFDisplayMode.twoUpContinuous)
+                        // View Mode Picker (Single Page, Two Pages, Presentation Mode)
+                        Picker("View Mode", selection: viewModeSelection) {
+                            Label("Single Page", systemImage: "doc").tag(ViewModeSelection.single)
+                            Label("Two Pages", systemImage: "book").tag(ViewModeSelection.twoUp)
+                            Label("Presentation Mode", systemImage: "play.rectangle.on.rectangle").tag(ViewModeSelection.presentation)
                         }
                         .pickerStyle(.segmented)
-                        .help("Switch between Portrait layout and Side-by-side spread")
+                        .help("Switch between Portrait, Spread, or Presentation mode")
                         
                         // Toggle Search
                         Button(action: { isSearchPresented.toggle() }) {
@@ -338,6 +417,36 @@ struct ContentView: View {
         .focusedSceneValue(\.openWindowAction, {
             openNewPDFInNewWindow()
         })
+        // Expose presentation trigger (Cmd+Option+P)
+        .focusedSceneValue(\.presentationAction, {
+            if pdfDocument != nil {
+                if isPresentationMode {
+                    exitPresentationMode()
+                } else {
+                    enterPresentationMode()
+                }
+            }
+        })
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ExitPresentationMode"))) { _ in
+            if isPresentationMode {
+                exitPresentationMode()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { notification in
+            guard let window = notification.object as? NSWindow, window == currentWindow else { return }
+            if isPresentationMode {
+                exitPresentationMode()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { notification in
+            guard let window = notification.object as? NSWindow, window == currentWindow else { return }
+            if isPresentationMode {
+                sharedPDFView.autoScales = false
+                DispatchQueue.main.async {
+                    sharedPDFView.autoScales = true
+                }
+            }
+        }
         .background(
             Button("") {
                 autoScales.toggle()
@@ -360,6 +469,36 @@ struct ContentView: View {
                 }
             }
         )
+    }
+    
+    private func enterPresentationMode() {
+        guard let window = currentWindow else { return }
+        
+        savedDisplayMode = displayMode
+        savedAutoScales = autoScales
+        savedColumnVisibility = columnVisibility
+        
+        displayMode = .singlePage
+        autoScales = true
+        columnVisibility = .detailOnly
+        isPresentationMode = true
+        
+        if !window.styleMask.contains(.fullScreen) {
+            window.toggleFullScreen(nil)
+        }
+    }
+    
+    private func exitPresentationMode() {
+        guard isPresentationMode else { return }
+        isPresentationMode = false
+        
+        displayMode = savedDisplayMode
+        autoScales = savedAutoScales
+        columnVisibility = savedColumnVisibility
+        
+        if let window = currentWindow, window.styleMask.contains(.fullScreen) {
+            window.toggleFullScreen(nil)
+        }
     }
     
     // Close the current tab, or return to the landing page if it is the last tab
