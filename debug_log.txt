@@ -1,0 +1,1 @@
+2026-06-02 10:37:12 +0000: WindowAccessor callback: window=<SwiftUI.AppKitWindow: 0x99652f600>, shouldCloseWindow=false, fileURL=nil

@@ -11,6 +11,39 @@ import UniformTypeIdentifiers
     }
 }
 
+struct WindowAccessor: NSViewRepresentable {
+    var shouldClose: Bool
+    var onWindowFound: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            if let window = view.window {
+                onWindowFound(window)
+                if shouldClose {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        window.close()
+                    }
+                }
+            }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            if let window = nsView.window {
+                onWindowFound(window)
+                if shouldClose {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        window.close()
+                    }
+                }
+            }
+        }
+    }
+}
+
 // Brand logo view displaying "simple" on top and "PDF" on bottom
 struct BrandLogoView: View {
     let size: CGFloat
@@ -45,6 +78,9 @@ struct BrandLogoView: View {
 
 struct ContentView: View {
     @State var fileURL: URL?
+    @State private var currentWindow: NSWindow? = nil
+    @State private var registeredURL: URL? = nil
+    @State private var shouldCloseWindow = false
     
     // Timer to track tab bar button positions
     @State private var tabCheckTimer: Timer? = nil
@@ -198,16 +234,35 @@ struct ContentView: View {
             tabCheckTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
                 setupTabBarButtons()
             }
+            
+            // Register Apple Event handler for subsequent document opens
+            if !AppleEventsHandler.hasRegistered {
+                AppleEventsHandler.hasRegistered = true
+                NSAppleEventManager.shared().setEventHandler(
+                    AppleEventsHandler.shared,
+                    andSelector: #selector(AppleEventsHandler.handleOpenDocsEvent(_:withReplyEvent:)),
+                    forEventClass: AEEventClass(kCoreEventClass),
+                    andEventID: AEEventID(kAEOpenDocuments)
+                )
+            }
         }
         .onDisappear {
             tabCheckTimer?.invalidate()
             tabCheckTimer = nil
+            if let url = registeredURL {
+                OpenDocumentsRegistry.shared.unregister(url: url)
+            }
         }
         .onChange(of: fileURL) { _, _ in
             loadPDF()
         }
         .onOpenURL { url in
             if focusWindow(showing: url) {
+                if let window = currentWindow {
+                    window.close()
+                } else {
+                    self.shouldCloseWindow = true
+                }
                 return
             }
             if fileURL == nil {
@@ -219,7 +274,7 @@ struct ContentView: View {
         }
         // Handle PDF opening requests from the native tab bar '+' button
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("OpenPDFAsTab"))) { notification in
-            guard sharedPDFView.window?.isKeyWindow == true else { return }
+            guard currentWindow?.isKeyWindow == true else { return }
             if let url = notification.object as? URL {
                 if focusWindow(showing: url) {
                     return
@@ -235,7 +290,7 @@ struct ContentView: View {
         // Handle middle-click close on the last tab → return to landing page
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("ReturnToLandingPage"))) { notification in
             guard let closingWindow = notification.object as? NSWindow,
-                  closingWindow == sharedPDFView.window else { return }
+                  closingWindow == currentWindow else { return }
             self.pdfDocument = nil
             self.fileURL = nil
             self.currentPage = 1
@@ -279,13 +334,27 @@ struct ContentView: View {
             .opacity(0)
             .allowsHitTesting(false)
         )
+        .background(
+            WindowAccessor(shouldClose: shouldCloseWindow) { window in
+                self.currentWindow = window
+                self.updateRegistry()
+                if let url = fileURL {
+                    if let existingWindow = OpenDocumentsRegistry.shared.window(showing: url), existingWindow != window {
+                        existingWindow.makeKeyAndOrderFront(nil)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            window.close()
+                        }
+                    }
+                }
+            }
+        )
     }
     
     // Close the current tab, or return to the landing page if it is the last tab
     private func closeCurrentDocument() {
         guard pdfDocument != nil else { return } // Already on landing page
         
-        let currentWindow = sharedPDFView.window ?? NSApp.keyWindow
+        let currentWindow = self.currentWindow ?? NSApp.keyWindow
         
         // Check how many tabs are in the current tab group
         let tabbedWindowCount = currentWindow?.tabGroup?.windows.count ?? 1
@@ -318,7 +387,7 @@ struct ContentView: View {
     
     // Dynamically inject the sort button next to the native plus button on the AppKit tab bar
     private func setupTabBarButtons() {
-        guard let window = sharedPDFView.window ?? NSApp.keyWindow else { return }
+        guard let window = currentWindow ?? NSApp.keyWindow else { return }
         
         func findNewTabButton(in view: NSView) -> NSView? {
             let className = String(describing: type(of: view))
@@ -470,31 +539,29 @@ struct ContentView: View {
     private func loadPDF() {
         guard let url = fileURL else {
             pdfDocument = nil
+            updateRegistry()
             return
         }
         
-        // Find the window hosting this ContentView
-        let hostingWindow: NSWindow? = {
-            if let w = sharedPDFView.window { return w }
-            for window in NSApplication.shared.windows {
-                if let contentView = window.contentView,
-                   findPDFView(in: contentView) == sharedPDFView {
-                    return window
+        if let window = currentWindow {
+            if focusWindow(showing: url, excluding: window) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    window.close()
                 }
+                return
             }
-            return nil
-        }()
-        
-        // If there is another window already displaying this PDF, focus it and close this window
-        if let window = hostingWindow, focusWindow(showing: url, excluding: window) {
-            window.close()
-            return
+        } else {
+            if OpenDocumentsRegistry.shared.window(showing: url) != nil {
+                self.shouldCloseWindow = true
+                return
+            }
         }
         
         if let doc = PDFDocument(url: url) {
             self.pdfDocument = doc
             self.totalPages = doc.pageCount
             self.currentPage = 1
+            self.updateRegistry()
         }
     }
     
@@ -603,6 +670,22 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+    }
+    
+    private func updateRegistry() {
+        guard let window = currentWindow else { return }
+        
+        // Unregister old URL if it changed
+        if let oldURL = registeredURL, oldURL != fileURL {
+            OpenDocumentsRegistry.shared.unregister(url: oldURL)
+            registeredURL = nil
+        }
+        
+        // Register new URL
+        if let newURL = fileURL {
+            OpenDocumentsRegistry.shared.register(window: window, for: newURL)
+            registeredURL = newURL
         }
     }
 }

@@ -146,39 +146,15 @@ struct FileJumpCommands: Commands {
 
 // Save the paths of all open PDF documents to restore later
 func saveOpenDocuments() {
-    let urls = NSApplication.shared.windows.compactMap { window -> String? in
-        guard let contentView = window.contentView else { return nil }
-        return findPDFView(in: contentView)?.document?.documentURL?.path
-    }
+    let urls = OpenDocumentsRegistry.shared.openPaths()
     UserDefaults.standard.set(urls, forKey: "OpenPDFPaths")
-}
-
-// Helper to recursively find CustomPDFView in view hierarchy
-func findPDFView(in view: NSView) -> CustomPDFView? {
-    if let pdfView = view as? CustomPDFView {
-        return pdfView
-    }
-    for subview in view.subviews {
-        if let found = findPDFView(in: subview) {
-            return found
-        }
-    }
-    return nil
 }
 
 // Focus window displaying a specific PDF file and return true, or return false if not found
 func focusWindow(showing url: URL, excluding currentWindow: NSWindow? = nil) -> Bool {
-    let targetPath = url.standardized.path
-    for window in NSApplication.shared.windows {
-        guard window != currentWindow && window.isVisible && window.canBecomeKey && !window.className.contains("Panel") else { continue }
-        if let contentView = window.contentView,
-           let pdfView = findPDFView(in: contentView),
-           let docURL = pdfView.document?.documentURL {
-            if docURL.standardized.path.localizedCaseInsensitiveCompare(targetPath) == .orderedSame {
-                window.makeKeyAndOrderFront(nil)
-                return true
-            }
-        }
+    if let window = OpenDocumentsRegistry.shared.window(showing: url), window != currentWindow {
+        window.makeKeyAndOrderFront(nil)
+        return true
     }
     return false
 }
@@ -195,37 +171,6 @@ func restoreOpenDocuments() {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    static var launchURL: URL?
-    
-    func application(_ sender: NSApplication, openFiles filenames: [String]) {
-        for filename in filenames {
-            let url = URL(fileURLWithPath: filename)
-            handleOpenURL(url)
-        }
-        sender.reply(toOpenOrPrint: .success)
-    }
-    
-    func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls {
-            handleOpenURL(url)
-        }
-    }
-    
-    private func handleOpenURL(_ url: URL) {
-        if focusWindow(showing: url) {
-            return
-        }
-        
-        let activeWindows = NSApplication.shared.windows.filter {
-            $0.isVisible && !$0.className.contains("Panel") && $0.canBecomeKey
-        }
-        
-        if activeWindows.isEmpty {
-            AppDelegate.launchURL = url
-        } else {
-            NotificationCenter.default.post(name: Notification.Name("OpenPDFAsTab"), object: url)
-        }
-    }
 }
 
 @main
@@ -273,7 +218,7 @@ struct SimplePDFApp: App {
     var body: some Scene {
         // Main window (shows landing page by default, or initial URL)
         WindowGroup {
-            ContentView(fileURL: AppDelegate.launchURL ?? initialURL)
+            ContentView(fileURL: initialURL)
                 .frame(minWidth: 800, minHeight: 600)
         }
         
@@ -306,6 +251,85 @@ extension NSWindow {
         
         if panel.runModal() == .OK, let url = panel.url {
             NotificationCenter.default.post(name: Notification.Name("OpenPDFAsTab"), object: url)
+        }
+    }
+}
+
+class OpenDocumentsRegistry {
+    static let shared = OpenDocumentsRegistry()
+    
+    private var openDocuments: [String: NSWindow] = [:]
+    private let lock = NSLock()
+    
+    func register(window: NSWindow, for url: URL) {
+        lock.lock()
+        defer { lock.unlock() }
+        let path = url.standardized.path
+        openDocuments[path] = window
+    }
+    
+    func unregister(url: URL) {
+        lock.lock()
+        defer { lock.unlock() }
+        let path = url.standardized.path
+        openDocuments.removeValue(forKey: path)
+        
+        // Fallback case-insensitive unregister to be safe
+        let lowercasePath = path.lowercased()
+        if let key = openDocuments.keys.first(where: { $0.lowercased() == lowercasePath }) {
+            openDocuments.removeValue(forKey: key)
+        }
+    }
+    
+    func window(showing url: URL) -> NSWindow? {
+        lock.lock()
+        defer { lock.unlock() }
+        let path = url.standardized.path
+        if let window = openDocuments[path], window.isVisible {
+            return window
+        }
+        
+        // Fallback case-insensitive search
+        let lowercasePath = path.lowercased()
+        for (openPath, window) in openDocuments {
+            if openPath.lowercased() == lowercasePath && window.isVisible {
+                return window
+            }
+        }
+        return nil
+    }
+    
+    func openPaths() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return openDocuments.compactMap { path, window in
+            return window.isVisible ? path : nil
+        }
+    }
+}
+
+class AppleEventsHandler: NSObject {
+    static let shared = AppleEventsHandler()
+    static var hasRegistered = false
+    
+    @objc func handleOpenDocsEvent(_ event: NSAppleEventDescriptor, withReplyEvent replyEvent: NSAppleEventDescriptor) {
+        guard let filesList = event.paramDescriptor(forKeyword: keyDirectObject) else { return }
+        
+        var urls: [URL] = []
+        for i in 1...filesList.numberOfItems {
+            if let descriptor = filesList.atIndex(i),
+               let url = descriptor.fileURLValue {
+                urls.append(url)
+            }
+        }
+        
+        for url in urls {
+            DispatchQueue.main.async {
+                if focusWindow(showing: url) {
+                    return
+                }
+                NotificationCenter.default.post(name: Notification.Name("OpenPDFAsTab"), object: url)
+            }
         }
     }
 }
