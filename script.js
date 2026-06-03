@@ -19,14 +19,4 @@ document.addEventListener('DOMContentLoaded', () => {
         e.preventDefault();
         alert('Download feature coming soon! SimplePDF DMG will be available here.');
     });
-
-    const coffeeBtns = document.querySelectorAll('.btn-small, .btn-coffee');
-    coffeeBtns.forEach(btn => {
-        if(btn.textContent.includes('coffee') || btn.textContent.includes('Coffee')) {
-            btn.addEventListener('click', (e) => {
-                e.preventDefault();
-                alert('Thank you! Buy Me a Coffee integration coming soon.');
-            });
-        }
-    });
 });
