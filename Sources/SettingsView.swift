@@ -513,6 +513,16 @@ struct SettingsView: View {
                                     AppLogger.shared.openLogFolder()
                                 }
                             }
+                            
+                            HStack(spacing: 8) {
+                                Spacer()
+                                    .frame(width: labelWidth)
+                                Button("Report an Issue") {
+                                    if let url = URL(string: "https://github.com/Sunkarr/simplePDF/issues") {
+                                        NSWorkspace.shared.open(url)
+                                    }
+                                }
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
