@@ -378,7 +378,8 @@ struct ContentView: View {
         }
         // Handle PDF opening requests from the native tab bar '+' button
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("OpenPDFAsTab"))) { notification in
-            guard currentWindow?.isKeyWindow == true else { return }
+            let isPrimaryWindow = currentWindow?.isKeyWindow == true || (NSApp.keyWindow == nil && NSApp.windows.filter({ $0.isVisible && $0.canBecomeKey }).first == currentWindow)
+            guard isPrimaryWindow else { return }
             if let url = notification.object as? URL {
                 if focusWindow(showing: url) {
                     return
@@ -854,7 +855,7 @@ struct ContentView: View {
                           let url = URL(dataRepresentation: data, relativeTo: nil) else { return }
                     
                     if url.pathExtension.lowercased() == "pdf" {
-                        guard self.isValidPDF(url: url) else {
+                        guard let resolved = self.validateAndResolvePDF(url: url) else {
                             DispatchQueue.main.async {
                                 let alert = NSAlert()
                                 alert.messageText = "Invalid PDF File"
@@ -866,10 +867,9 @@ struct ContentView: View {
                         }
                         DispatchQueue.main.async {
                             if self.fileURL == nil {
-                                self.fileURL = url
-                                self.loadPDF()
+                                self.fileURL = resolved
                             } else {
-                                self.openWindow(value: url)
+                                self.openWindow(value: resolved)
                             }
                         }
                     }
@@ -879,7 +879,6 @@ struct ContentView: View {
         }
     }
     
-    // Load PDFDocument from fileURL state
     private func loadPDF() {
         guard let url = fileURL else {
             pdfDocument = nil
@@ -887,7 +886,7 @@ struct ContentView: View {
             return
         }
         
-        guard isValidPDF(url: url) else {
+        guard let resolvedURL = validateAndResolvePDF(url: url) else {
             let alert = NSAlert()
             alert.messageText = "Invalid PDF File"
             alert.informativeText = "The file is either not a valid PDF or exceeds the size limit of \(maxPDFFileSizeMB) MB."
@@ -899,21 +898,29 @@ struct ContentView: View {
             return
         }
         
+        // If the URL was resolved (e.g. iCloud placeholder was downloaded), update fileURL and restart the load
+        if url != resolvedURL {
+            DispatchQueue.main.async {
+                self.fileURL = resolvedURL
+            }
+            return
+        }
+        
         if let window = currentWindow {
-            if focusWindow(showing: url, excluding: window) {
+            if focusWindow(showing: resolvedURL, excluding: window) {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                     window.close()
                 }
                 return
             }
         } else {
-            if OpenDocumentsRegistry.shared.window(showing: url) != nil {
+            if OpenDocumentsRegistry.shared.window(showing: resolvedURL) != nil {
                 self.shouldCloseWindow = true
                 return
             }
         }
         
-        if let doc = PDFDocument(url: url) {
+        if let doc = PDFDocument(url: resolvedURL) {
             doc.delegate = sharedPDFView
             self.pdfDocument = doc
             self.totalPages = doc.pageCount
@@ -931,15 +938,14 @@ struct ContentView: View {
         
         if panel.runModal() == .OK {
             for url in panel.urls {
-                guard self.isValidPDF(url: url) else { continue }
-                if focusWindow(showing: url) {
+                guard let resolved = self.validateAndResolvePDF(url: url) else { continue }
+                if focusWindow(showing: resolved) {
                     continue
                 }
                 if self.fileURL == nil {
-                    self.fileURL = url
-                    self.loadPDF()
+                    self.fileURL = resolved // triggers loadPDF automatically via onChange
                 } else {
-                    openWindow(value: url)
+                    openWindow(value: resolved)
                 }
             }
         }
@@ -954,15 +960,14 @@ struct ContentView: View {
         
         if panel.runModal() == .OK {
             for url in panel.urls {
-                guard self.isValidPDF(url: url) else { continue }
-                if focusWindow(showing: url) {
+                guard let resolved = self.validateAndResolvePDF(url: url) else { continue }
+                if focusWindow(showing: resolved) {
                     continue
                 }
                 if fileURL == nil {
-                    self.fileURL = url
-                    self.loadPDF()
+                    self.fileURL = resolved
                 } else {
-                    openWindow(value: url)
+                    openWindow(value: resolved)
                 }
             }
         }
@@ -976,7 +981,12 @@ struct ContentView: View {
         panel.allowedContentTypes = [.pdf]
         
         if panel.runModal() == .OK {
-            let validURLs = panel.urls.filter { self.isValidPDF(url: $0) && !focusWindow(showing: $0) }
+            let validURLs = panel.urls.compactMap { url -> URL? in
+                if let resolved = self.validateAndResolvePDF(url: url), !focusWindow(showing: resolved) {
+                    return resolved
+                }
+                return nil
+            }
             if let firstURL = validURLs.first {
                 openWindow(value: firstURL)
                 
@@ -1052,24 +1062,41 @@ struct ContentView: View {
         }
     }
     
-    private func isValidPDF(url: URL) -> Bool {
-        // 1. Check file size
-        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let fileSize = attributes[.size] as? NSNumber {
-            if fileSize.intValue > maxPDFFileSizeMB * 1024 * 1024 {
-                print("Validation failed: File size \(fileSize.intValue) exceeds limit of \(maxPDFFileSizeMB) MB")
-                return false
+    private func validateAndResolvePDF(url: URL) -> URL? {
+        var resolvedURL: URL? = nil
+        var coordinationError: NSError?
+        
+        // Use NSFileCoordinator to ensure iCloud files are downloaded and accessible
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        coordinator.coordinate(readingItemAt: url, options: .withoutChanges, error: &coordinationError) { readURL in
+            // 1. Check file size
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: readURL.path),
+               let fileSize = attributes[.size] as? NSNumber {
+                if fileSize.intValue > maxPDFFileSizeMB * 1024 * 1024 {
+                    print("Validation failed: File size \(fileSize.intValue) exceeds limit of \(maxPDFFileSizeMB) MB")
+                    return
+                }
+            }
+            
+            // 2. Check Magic Bytes ("%PDF-")
+            guard let fileHandle = try? FileHandle(forReadingFrom: readURL) else {
+                print("Validation failed: Could not open file handle")
+                return
+            }
+            defer { try? fileHandle.close() }
+            let data = fileHandle.readData(ofLength: 5)
+            if let string = String(data: data, encoding: .utf8), string.hasPrefix("%PDF-") {
+                resolvedURL = readURL
+            } else {
+                print("Validation failed: Invalid magic bytes")
             }
         }
         
-        // 2. Check Magic Bytes ("%PDF-")
-        guard let fileHandle = try? FileHandle(forReadingFrom: url) else { return false }
-        defer { try? fileHandle.close() }
-        let data = fileHandle.readData(ofLength: 5)
-        if let string = String(data: data, encoding: .utf8), string.hasPrefix("%PDF-") {
-            return true
+        if let error = coordinationError {
+            print("Validation failed: File coordination error: \(error.localizedDescription)")
+            return nil
         }
-        print("Validation failed: Invalid magic bytes")
-        return false
+        
+        return resolvedURL
     }
 }

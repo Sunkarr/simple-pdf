@@ -371,7 +371,20 @@ class AppleEventsHandler: NSObject {
                 if focusWindow(showing: url) {
                     return
                 }
-                NotificationCenter.default.post(name: Notification.Name("OpenPDFAsTab"), object: url)
+                
+                let hasVisibleWindows = !NSApp.windows.filter({ $0.isVisible && $0.canBecomeKey }).isEmpty
+                if !hasVisibleWindows {
+                    // Temporarily remove our custom handler and let SwiftUI handle opening a new window
+                    NSAppleEventManager.shared().removeEventHandler(
+                        forEventClass: AEEventClass(kCoreEventClass),
+                        andEventID: AEEventID(kAEOpenDocuments)
+                    )
+                    AppleEventsHandler.hasRegistered = false
+                    
+                    NSWorkspace.shared.open([url], withApplicationAt: Bundle.main.bundleURL, configuration: NSWorkspace.OpenConfiguration())
+                } else {
+                    NotificationCenter.default.post(name: Notification.Name("OpenPDFAsTab"), object: url)
+                }
             }
         }
     }
