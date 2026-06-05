@@ -36,6 +36,7 @@ class WindowCloseProxy: NSObject, NSWindowDelegate {
 class CustomPDFView: PDFView, PDFDocumentDelegate {
     private var scrollMonitor: Any?
     private var closeProxy: WindowCloseProxy?
+    private var hasMergedIntoTabGroup = false
     
     private var activeHighlightedPage: HighlightablePDFPage?
     private var activeHighlightedRect: CGRect?
@@ -165,7 +166,8 @@ class CustomPDFView: PDFView, PDFDocumentDelegate {
             window.tabbingMode = .preferred
             
             // Merge this window into any existing window's tab group to ensure tabs are used
-            if !TabBarButtonTarget.isSorting {
+            // Only run once per window to prevent resize flashes from repeated viewDidMoveToWindow calls
+            if !TabBarButtonTarget.isSorting && !hasMergedIntoTabGroup {
                 let otherWindows = NSApplication.shared.windows.filter {
                     $0 != window &&
                     $0.isVisible &&
@@ -174,14 +176,19 @@ class CustomPDFView: PDFView, PDFDocumentDelegate {
                     $0.canBecomeKey
                 }
                 if let hostWindow = otherWindows.first {
+                    hasMergedIntoTabGroup = true
+                    
                     // Match the frame of the host window exactly so that adding it as a tab doesn't cause a resize
-                    window.setFrame(hostWindow.frame, display: false)
+                    NSAnimationContext.beginGrouping()
+                    NSAnimationContext.current.duration = 0
+                    window.setFrame(hostWindow.frame, display: false, animate: false)
                     
                     let lastTab = hostWindow.tabGroup?.windows.last ?? hostWindow
                     lastTab.makeKey()
                     lastTab.addTabbedWindow(window, ordered: .above)
                     // Select this new tab so it becomes active
                     window.makeKey()
+                    NSAnimationContext.endGrouping()
                 }
             }
             
