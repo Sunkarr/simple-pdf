@@ -48,10 +48,8 @@ struct SidebarView: View {
                                         let thumbnailHeight = thumbnailWidth / aspectRatio
                                         
                                         VStack(spacing: 6) {
-                                            Image(nsImage: page.thumbnail(of: NSSize(width: thumbnailWidth * 2.0, height: thumbnailHeight * 2.0), for: .mediaBox))
-                                                .resizable()
-                                                .aspectRatio(contentMode: .fit)
-                                                .frame(width: thumbnailWidth, height: thumbnailHeight)
+                                            PageThumbnailView(page: page, width: thumbnailWidth, height: thumbnailHeight)
+                                                .id(page)
                                                 .background(Color.white)
                                                 .cornerRadius(4)
                                                 .shadow(color: Color.black.opacity(0.12), radius: 4, x: 0, y: 2)
@@ -202,6 +200,51 @@ struct SidebarView: View {
                 )
             }
             return nil
+        }
+    }
+}
+
+/// Cache to store generated page thumbnails to avoid regenerations during scroll/selection updates
+class ThumbnailCache {
+    static let shared = NSCache<AnyObject, NSImage>()
+}
+
+struct PageThumbnailView: View {
+    let page: PDFPage
+    let width: CGFloat
+    let height: CGFloat
+    
+    @State private var thumbnail: NSImage? = nil
+    
+    var body: some View {
+        Group {
+            if let img = thumbnail {
+                Image(nsImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Color.white
+            }
+        }
+        .frame(width: width, height: height)
+        .onAppear {
+            loadThumbnail()
+        }
+    }
+    
+    private func loadThumbnail() {
+        if let cached = ThumbnailCache.shared.object(forKey: page) {
+            self.thumbnail = cached
+            return
+        }
+        
+        let targetSize = NSSize(width: width * 2.0, height: height * 2.0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let img = page.thumbnail(of: targetSize, for: .mediaBox)
+            ThumbnailCache.shared.setObject(img, forKey: page)
+            DispatchQueue.main.async {
+                self.thumbnail = img
+            }
         }
     }
 }
