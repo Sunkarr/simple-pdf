@@ -998,17 +998,14 @@ struct ContentView: View {
                 return nil
             }
             if let firstURL = validURLs.first {
+                // Register the first URL to be opened in a separate window
+                OpenDocumentsRegistry.shared.registerSeparateWindow(for: firstURL)
                 openWindow(value: firstURL)
                 
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    if let newWindow = NSApplication.shared.windows.last(where: { $0.isVisible && $0.canBecomeKey }) {
-                        newWindow.tabbingMode = .disallowed
-                        newWindow.moveTabToNewWindow(nil)
-                        newWindow.tabbingMode = .preferred
-                        if let tabGroup = newWindow.tabGroup, !tabGroup.isTabBarVisible {
-                            newWindow.toggleTabBar(nil)
-                        }
-                        
+                // Subsequent URLs (if multiple files were selected) should be opened as tabs in this new window.
+                // We open them after a short delay to allow the new window to be registered as the key window.
+                if validURLs.count > 1 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                         for url in validURLs.dropFirst() {
                             self.openWindow(value: url)
                         }

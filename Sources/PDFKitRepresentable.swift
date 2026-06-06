@@ -168,6 +168,16 @@ class CustomPDFView: PDFView, PDFDocumentDelegate {
             // Merge this window into any existing window's tab group to ensure tabs are used
             // Only run once per window to prevent resize flashes from repeated viewDidMoveToWindow calls
             if !TabBarButtonTarget.isSorting && !hasMergedIntoTabGroup {
+                if let url = self.document?.documentURL, OpenDocumentsRegistry.shared.consumeSeparateWindow(for: url) {
+                    hasMergedIntoTabGroup = true
+                    DispatchQueue.main.async {
+                        if let tabGroup = window.tabGroup, !tabGroup.isTabBarVisible {
+                            window.toggleTabBar(nil)
+                        }
+                    }
+                    return
+                }
+                
                 let otherWindows = NSApplication.shared.windows.filter {
                     $0 != window &&
                     $0.isVisible &&
@@ -177,6 +187,9 @@ class CustomPDFView: PDFView, PDFDocumentDelegate {
                 }
                 if let hostWindow = otherWindows.first {
                     hasMergedIntoTabGroup = true
+                    
+                    // Hide the window visually before merging it to prevent a brief separate window flash
+                    window.alphaValue = 0.0
                     
                     // Match the frame synchronously so the window is the right size instantly and doesn't flash
                     NSAnimationContext.beginGrouping()
@@ -194,6 +207,9 @@ class CustomPDFView: PDFView, PDFDocumentDelegate {
                         lastTab.addTabbedWindow(window, ordered: .above)
                         // Select this new tab so it becomes active
                         window.makeKey()
+                        
+                        // Restore visibility
+                        window.alphaValue = 1.0
                         NSAnimationContext.endGrouping()
                     }
                 }

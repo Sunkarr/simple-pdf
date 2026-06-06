@@ -291,7 +291,22 @@ class OpenDocumentsRegistry {
     static let shared = OpenDocumentsRegistry()
     
     private var openDocuments: [String: NSWindow] = [:]
+    private var separateWindowURLs: Set<String> = []
     private let lock = NSLock()
+    
+    func registerSeparateWindow(for url: URL) {
+        lock.lock()
+        defer { lock.unlock() }
+        let path = url.standardized.path.lowercased()
+        separateWindowURLs.insert(path)
+    }
+    
+    func consumeSeparateWindow(for url: URL) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let path = url.standardized.path.lowercased()
+        return separateWindowURLs.remove(path) != nil
+    }
     
     func register(window: NSWindow, for url: URL) {
         lock.lock()
