@@ -2,7 +2,7 @@
 
 A sleek, lightweight PDF viewer for macOS. No bloatware, no popups, and no subscription... ever.
 
-**[Download & Website ↗](https://sunkarr.github.io/sindriPDF)**
+**[Download & Website ↗](https://sunkarr.github.io/Sindri-PDF)**
 
 ![Native macOS App](https://img.shields.io/badge/macOS-Native-blue)
 ![Free and Open Source](https://img.shields.io/badge/Open-Source-green)
