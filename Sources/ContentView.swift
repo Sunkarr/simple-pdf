@@ -112,6 +112,8 @@ struct ContentView: View {
     @State private var displayMode: PDFDisplayMode = .singlePageContinuous
     
     @AppStorage("sidebarWidth") private var sidebarWidth: Double = 250.0
+    @State private var activeSidebarWidth: CGFloat = 250.0
+    @State private var sidebarSaveTask: Task<Void, Never>? = nil
     @AppStorage("shortcut_zoomFit") private var zoomFitShortcutData: Data?
     @AppStorage("maxPDFFileSizeMB") private var maxPDFFileSizeMB: Int = 250
     
@@ -176,19 +178,29 @@ struct ContentView: View {
                     SidebarView(
                         document: doc,
                         pdfView: sharedPDFView,
-                        currentPage: $currentPage
+                        currentPage: $currentPage,
+                        sidebarWidth: activeSidebarWidth
                     )
                     .background(
                         GeometryReader { geometry in
                             Color.clear
                                 .onChange(of: geometry.size.width) { _, newWidth in
-                                    if newWidth >= 150 && abs(sidebarWidth - newWidth) > 0.5 {
-                                        sidebarWidth = newWidth
+                                    if newWidth >= 150 {
+                                        if abs(activeSidebarWidth - newWidth) > 0.5 {
+                                            activeSidebarWidth = newWidth
+                                        }
+                                        sidebarSaveTask?.cancel()
+                                        sidebarSaveTask = Task {
+                                            try? await Task.sleep(nanoseconds: 200_000_000)
+                                            if !Task.isCancelled {
+                                                sidebarWidth = Double(newWidth)
+                                            }
+                                        }
                                     }
                                 }
                         }
                     )
-                    .navigationSplitViewColumnWidth(min: 150, ideal: sidebarWidth, max: 400)
+                    .navigationSplitViewColumnWidth(min: 150, ideal: activeSidebarWidth, max: 400)
                 } detail: {
                     ZStack {
                         VStack(spacing: 0) {
@@ -311,6 +323,7 @@ struct ContentView: View {
         }
         .navigationTitle(fileURL?.lastPathComponent ?? "Sindri PDF")
         .onAppear {
+            activeSidebarWidth = CGFloat(sidebarWidth)
             loadPDF()
             restoreSavedSessionIfFirstWindow()
             

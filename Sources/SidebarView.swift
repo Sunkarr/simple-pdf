@@ -1,5 +1,6 @@
 import SwiftUI
 import PDFKit
+import AppKit
 
 struct OutlineItem: Identifiable {
     let id = UUID()
@@ -12,6 +13,7 @@ struct SidebarView: View {
     let document: PDFDocument?
     let pdfView: CustomPDFView
     @Binding var currentPage: Int
+    let sidebarWidth: CGFloat
     
     @State private var selectedTab = 0 // 0 = Pages, 1 = Outline
     @State private var outlineSearchQuery = ""
@@ -43,8 +45,8 @@ struct SidebarView: View {
                                         let pageH = bounds.height > 0 ? bounds.height : 1.0
                                         let aspectRatio = pageW / pageH
                                         
-                                        // Target a standard width of 110 points and scale height proportionally
-                                        let thumbnailWidth: CGFloat = 110
+                                        // Target a width proportional to the sidebar width, minus margins, bounded reasonably
+                                        let thumbnailWidth = max(60, min(300, sidebarWidth - 40))
                                         let thumbnailHeight = thumbnailWidth / aspectRatio
                                         
                                         VStack(spacing: 6) {
@@ -139,6 +141,7 @@ struct SidebarView: View {
                 }
             }
         }
+        .padding(.trailing, 6)
         .onChange(of: document) { _, newDoc in
             loadOutline(from: newDoc)
         }
@@ -238,7 +241,17 @@ struct PageThumbnailView: View {
             return
         }
         
-        let targetSize = NSSize(width: width * 2.0, height: height * 2.0)
+        // Generate a fixed high-resolution thumbnail (240pt, 480px at 2x)
+        // so it looks crisp at any sidebar width and doesn't need regeneration on drag.
+        let bounds = page.bounds(for: .mediaBox)
+        let pageW = bounds.width > 0 ? bounds.width : 1.0
+        let pageH = bounds.height > 0 ? bounds.height : 1.0
+        let aspectRatio = pageW / pageH
+        
+        let targetWidth: CGFloat = 240
+        let targetHeight = targetWidth / aspectRatio
+        let targetSize = NSSize(width: targetWidth * 2.0, height: targetHeight * 2.0)
+        
         DispatchQueue.global(qos: .userInitiated).async {
             let img = page.thumbnail(of: targetSize, for: .mediaBox)
             ThumbnailCache.shared.setObject(img, forKey: page)
